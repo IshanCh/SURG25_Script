@@ -1,0 +1,137 @@
+import smtplib
+from email.mime.text import MIMEText
+from random import shuffle
+import time
+import csv
+from datetime import datetime
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
+
+# Gmail API setup (follow Gmail API Quickstart guide to set up credentials.json)
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+
+# Applicant profiles
+profiles = [
+    {"name": "Emily Johnson", "email": "emily.johnson.rent@gmail.com", "race": "White", "gender": "Female"},
+    {"name": "James Johnson", "email": "james.johnson.rent@gmail.com", "race": "White", "gender": "Male"},
+    {"name": "Latoya Washington", "email": "latoya.washington.rent@gmail.com", "race": "Black", "gender": "Female"},
+    {"name": "Jamal Washington", "email": "jamal.washington.rent@gmail.com", "race": "Black", "gender": "Male"},
+    {"name": "Mei Chen", "email": "mei.chen.rent@gmail.com", "race": "Asian", "gender": "Female"},
+    {"name": "David Chen", "email": "david.chen.rent@gmail.com", "race": "Asian", "gender": "Male"},
+    {"name": "Maria Gonzalez", "email": "maria.gonzalez.rent@gmail.com", "race": "Hispanic", "gender": "Female"},
+    {"name": "Carlos Gonzalez", "email": "carlos.gonzalez.rent@gmail.com", "race": "Hispanic", "gender": "Male"}
+]
+
+# Unit lists (rent-controlled and non-rent-controlled)
+rent_controlled_units = ["landlord_rc1@example.com", "landlord_rc2@example.com", "..."]  # Add 50 rent-controlled emails
+non_rent_controlled_units = ["landlord_nrc1@example.com", "landlord_nrc2@example.com", "..."]  # Add 50 non-rent-controlled emails
+
+# Function to create email content
+def create_email(profile):
+    subject = "Inquiry About Apartment Listing"
+    body = f"""
+    Dear Landlord,
+
+    My name is {profile['name']}, and I am very interested in the apartment you have listed. 
+    I currently work full-time and can provide proof of income and credit history. 
+    Please let me know if the unit is still available and how to proceed.
+
+    Thank you for your time.
+
+    Best regards,  
+    {profile['name']}
+    """
+    return subject, body
+
+# Function to send email
+def send_email(to_email, profile, unit_type, inquiries_sent):
+    from_email = profile['email']  # Each profile has its own email
+    password = "your-email-password"  # Replace with the respective email password
+
+    subject, body = create_email(profile)
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = to_email
+
+    try:
+        # Connect to Gmail's SMTP server
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(from_email, password)
+        server.sendmail(from_email, to_email, msg.as_string())
+        server.quit()
+        print(f"Email successfully sent to {to_email} using profile: {profile['name']} ({unit_type})")
+        inquiries_sent.append({
+            "profile": profile["name"],
+            "email": to_email,
+            "unit_type": unit_type,
+            "sent_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+    except Exception as e:
+        print(f"Failed to send email to {to_email}: {e}")
+
+# Function to log inquiries sent
+def log_inquiries(inquiries_sent):
+    with open("inquiries_sent.csv", mode="w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["profile", "email", "unit_type", "sent_time"])
+        writer.writeheader()
+        writer.writerows(inquiries_sent)
+
+# Automate email sending
+def automate_emails():
+    all_units = [(email, "Rent-Controlled") for email in rent_controlled_units] + \
+                [(email, "Non-Rent-Controlled") for email in non_rent_controlled_units]
+    shuffle(all_units)  # Shuffle to randomize the order
+
+    inquiries_sent = []
+
+    for profile in profiles:
+        count = 0
+        for email, unit_type in all_units:
+            if count >= 100:  # 50 rent-controlled + 50 non-rent-controlled per profile
+                break
+            send_email(email, profile, unit_type, inquiries_sent)
+            count += 1
+            time.sleep(60)  # Avoid spam detection
+
+    log_inquiries(inquiries_sent)
+
+# Gmail API: Fetch responses
+def get_responses():
+    creds = Credentials.from_authorized_user_file('credentials.json', SCOPES)
+    service = build('gmail', 'v1', credentials=creds)
+
+    # Read sent emails log
+    responses = []
+    with open("inquiries_sent.csv", mode="r") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            profile = row["profile"]
+            to_email = row["email"]
+            sent_time = datetime.strptime(row["sent_time"], "%Y-%m-%d %H:%M:%S")
+
+            # Query Gmail for replies
+            query = f"from:{to_email} to:{profiles[0]['email']}"  # Search emails sent to landlords
+            results = service.users().messages().list(userId="me", q=query).execute()
+            messages = results.get("messages", [])
+
+            if messages:
+                message = service.users().messages().get(userId="me", id=messages[0]["id"]).execute()
+                received_time = datetime.fromtimestamp(int(message["internalDate"]) / 1000)
+                response_time = (received_time - sent_time).total_seconds() / 3600  # Convert to hours
+                responses.append({
+                    "profile": profile,
+                    "email": to_email,
+                    "response_time": round(response_time, 2)
+                })
+
+    # Log responses
+    with open("responses.csv", mode="w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["profile", "email", "response_time"])
+        writer.writeheader()
+        writer.writerows(responses)
+
+# Run email automation and response tracking
+automate_emails()
+time.sleep(86400)  # Wait a day before fetching responses
+get_responses()
